@@ -33,7 +33,6 @@ jobs:
             commit="${commits[$i]}"
             n=$((i+1))
             echo "=== [$n/72] Cherry-picking $commit ==="
-
             if git cherry-pick -x "$commit"; then
               continue
             fi
@@ -42,19 +41,96 @@ jobs:
             mapfile -t conflicted < <(git diff --name-only --diff-filter=U)
             printf 'Conflicted files:\n%s\n' "${conflicted[@]}"
 
-            # This SUSFS v1.5.9 backport conflicts only because Q1 has an older
-            # implementation of these two files. For this specific upstream
-            # commit, take the complete source-side versions, preserving the
-            # requested commit while allowing the remaining commits to apply.
             if [ "$commit" = "0f2ff4cdef7b47894a2c1af666d0e66974f4ffc0" ]; then
               expected=(fs/notify/fdinfo.c fs/proc/cmdline.c)
-              if [ "${#conflicted[@]}" -ne 2 ] ||
-                 ! printf '%s\n' "${conflicted[@]}" | sort | cmp -s <(printf '%s\n' "${expected[@]}" | sort); then
-                echo 'Unexpected conflict set for the known SUSFS backport; stopping.'
+              if [ "${#conflicted[@]}" -ne 2 ] || ! printf '%s\n' "${conflicted[@]}" | sort | cmp -s <(printf '%s\n' "${expected[@]}" | sort); then
+                echo 'Unexpected conflict set for SUSFS v1.5.9; stopping.'
                 git status --short
                 exit 1
               fi
-              git checkout --theirs -- fs/notify/fdinfo.c fs/proc/cmdline.c
+
+              # Merge fdinfo.c deliberately: keep Q1's inotify mask semantics
+              # while applying the source commit's SUS_MOUNT implementation.
+              git show "$commit:fs/notify/fdinfo.c" | sed 's/inotify_mark_user_mask(mark)/mark->mask \& IN_ALL_EVENTS/g' > fs/notify/fdinfo.c
+
+              # Merge cmdline.c deliberately: keep Q1's SafetyNet filtering
+              # while adding SUSFS cmdline/bootconfig spoof support.
+              cat > fs/proc/cmdline.c <<'EOF'
+#include <linux/fs.h>
+#include <linux/init.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+#include <asm/setup.h>
+
+static char new_command_line[COMMAND_LINE_SIZE];
+
+#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+extern int susfs_spoof_cmdline_or_bootconfig(struct seq_file *m);
+#endif
+
+static int cmdline_proc_show(struct seq_file *m, void *v)
+{
+#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+	if (!susfs_spoof_cmdline_or_bootconfig(m)) {
+		seq_putc(m, '\n');
+		return 0;
+	}
+#endif
+	seq_puts(m, new_command_line);
+	seq_putc(m, '\n');
+	return 0;
+}
+
+static int cmdline_proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, cmdline_proc_show, NULL);
+}
+
+static const struct file_operations cmdline_proc_fops = {
+	.open		= cmdline_proc_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
+static void remove_flag(char *cmd, const char *flag)
+{
+	char *start_addr, *end_addr;
+
+	/* Ensure all instances of a flag are removed */
+	while ((start_addr = strstr(cmd, flag))) {
+		end_addr = strchr(start_addr, ' ');
+		if (end_addr)
+			memmove(start_addr, end_addr + 1, strlen(end_addr));
+		else
+			*(start_addr - 1) = '\0';
+	}
+}
+
+static void remove_safetynet_flags(char *cmd)
+{
+	remove_flag(cmd, "androidboot.enable_dm_verity=");
+	remove_flag(cmd, "androidboot.secboot=");
+	remove_flag(cmd, "androidboot.verifiedbootstate=");
+	remove_flag(cmd, "androidboot.veritymode=");
+}
+
+static int __init proc_cmdline_init(void)
+{
+	strcpy(new_command_line, saved_command_line);
+
+	/*
+	 * Remove various flags from command line seen by userspace in order to
+	 * pass SafetyNet CTS check.
+	 */
+	remove_safetynet_flags(new_command_line);
+
+	proc_create("cmdline", 0, NULL, &cmdline_proc_fops);
+	return 0;
+}
+fs_initcall(proc_cmdline_init);
+EOF
+
               git add fs/notify/fdinfo.c fs/proc/cmdline.c
               git -c core.editor=true cherry-pick --continue
               continue
@@ -67,11 +143,9 @@ jobs:
 
           echo 'All 72 requested commits were cherry-picked.'
 
-          # Commit 1 intentionally creates a KernelSU-Next gitlink, while the
-          # following commits import the actual KSU Next sources into
-          # drivers/kernelsu. Keep the commit in history but remove the broken
-          # unconfigured gitlink from the final tree so checkout/build cleanup
-          # cannot fail on a missing .gitmodules URL.
+          # Keep the gitlink commit in history, but remove only the broken
+          # unconfigured gitlink from the final tree because the following
+          # commits contain the actual KSU Next sources in drivers/kernelsu.
           if git ls-files --stage KernelSU-Next | grep -q '^160000 '; then
             git rm --cached -f KernelSU-Next
             git commit -m 'fix: remove unconfigured KernelSU-Next gitlink after integration'
@@ -87,7 +161,6 @@ jobs:
           test -f include/linux/susfs.h
           ! git ls-files --stage KernelSU-Next | grep -q '^160000 '
           echo 'KSU Next + SUSFS verification passed.'
-          echo 'Final HEAD:'
           git log -1 --oneline
 
       - name: Push target branch
