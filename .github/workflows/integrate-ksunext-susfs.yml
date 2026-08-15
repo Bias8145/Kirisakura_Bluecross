@@ -1,0 +1,55 @@
+name: Integrate KSU Next SUSFS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Q1 branch
+        uses: actions/checkout@v4
+        with:
+          ref: Release_Q_1-ksunext-susfs
+          fetch-depth: 0
+
+      - name: Integrate 21 May - 18 July 2026 commits
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add source https://github.com/Bias8145/android_kernel_google_msm-4.9.git || true
+          git fetch --no-tags source thirteen-next-2
+
+          mapfile -t commits < <(git log source/thirteen-next-2 --since='2026-05-21 00:00:00 +0000' --until='2026-07-19 00:00:00 +0000' --reverse --format='%H')
+          echo "Found ${#commits[@]} commits in requested period"
+          test "${#commits[@]}" -eq 72
+
+          for commit in "${commits[@]}"; do
+            echo "=== Cherry-picking $commit ==="
+            if git cherry-pick -x "$commit"; then
+              continue
+            fi
+
+            echo "Conflict detected; using incoming thirteen-next-2 version"
+            git checkout --theirs -- .
+            git add -A
+            git cherry-pick --continue || {
+              if git diff --cached --quiet; then
+                git cherry-pick --skip
+              else
+                git cherry-pick --abort
+                exit 1
+              fi
+            }
+          done
+
+          test "$(git log --format='%H' --all | wc -l)" -gt 0
+          test -f drivers/kernelsu/ksu.c
+          test -f fs/susfs.c
+          test -f include/linux/susfs.h
+          git push origin HEAD:Release_Q_1-ksunext-susfs
