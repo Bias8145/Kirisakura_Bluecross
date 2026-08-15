@@ -28,20 +28,67 @@ jobs:
           mapfile -t commits < <(git log source/thirteen-next-2 --since='2026-05-21 00:00:00 +0000' --until='2026-07-19 00:00:00 +0000' --reverse --format='%H')
           echo "Found ${#commits[@]} commits in requested period"
           test "${#commits[@]}" -eq 72
+
           for i in "${!commits[@]}"; do
             commit="${commits[$i]}"
-            echo "=== [$((i+1))/72] Cherry-picking $commit ==="
-            git cherry-pick -x "$commit"
+            n=$((i+1))
+            echo "=== [$n/72] Cherry-picking $commit ==="
+
+            if git cherry-pick -x "$commit"; then
+              continue
+            fi
+
+            echo "Cherry-pick conflict at [$n/72] $commit"
+            mapfile -t conflicted < <(git diff --name-only --diff-filter=U)
+            printf 'Conflicted files:\n%s\n' "${conflicted[@]}"
+
+            # This SUSFS v1.5.9 backport conflicts only because Q1 has an older
+            # implementation of these two files. For this specific upstream
+            # commit, take the complete source-side versions, preserving the
+            # requested commit while allowing the remaining commits to apply.
+            if [ "$commit" = "0f2ff4cdef7b47894a2c1af666d0e66974f4ffc0" ]; then
+              expected=(fs/notify/fdinfo.c fs/proc/cmdline.c)
+              if [ "${#conflicted[@]}" -ne 2 ] ||
+                 ! printf '%s\n' "${conflicted[@]}" | sort | cmp -s <(printf '%s\n' "${expected[@]}" | sort); then
+                echo 'Unexpected conflict set for the known SUSFS backport; stopping.'
+                git status --short
+                exit 1
+              fi
+              git checkout --theirs -- fs/notify/fdinfo.c fs/proc/cmdline.c
+              git add fs/notify/fdinfo.c fs/proc/cmdline.c
+              git -c core.editor=true cherry-pick --continue
+              continue
+            fi
+
+            echo 'Unknown conflict; stopping without skipping any commit.'
+            git status --short
+            exit 1
           done
+
+          echo 'All 72 requested commits were cherry-picked.'
+
+          # Commit 1 intentionally creates a KernelSU-Next gitlink, while the
+          # following commits import the actual KSU Next sources into
+          # drivers/kernelsu. Keep the commit in history but remove the broken
+          # unconfigured gitlink from the final tree so checkout/build cleanup
+          # cannot fail on a missing .gitmodules URL.
+          if git ls-files --stage KernelSU-Next | grep -q '^160000 '; then
+            git rm --cached -f KernelSU-Next
+            git commit -m 'fix: remove unconfigured KernelSU-Next gitlink after integration'
+          fi
 
       - name: Verify KSU Next and SUSFS
         shell: bash
         run: |
           set -euo pipefail
           test -d drivers/kernelsu
+          test -f drivers/kernelsu/ksu.c
           test -f fs/susfs.c
           test -f include/linux/susfs.h
-          git status --short
+          ! git ls-files --stage KernelSU-Next | grep -q '^160000 '
+          echo 'KSU Next + SUSFS verification passed.'
+          echo 'Final HEAD:'
+          git log -1 --oneline
 
       - name: Push target branch
         shell: bash
