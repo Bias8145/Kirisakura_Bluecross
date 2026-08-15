@@ -2,19 +2,12 @@ name: Integrate Q1 KSU Next SUSFS
 
 on:
   workflow_dispatch:
-    inputs:
-      target_branch:
-        description: Target branch to integrate into
-        required: true
-        default: Release_Q_1-ksunext-susfs
-        type: string
 
 permissions:
   contents: write
 
 jobs:
   integrate:
-    if: ${{ github.event.inputs.target_branch == 'Release_Q_1-ksunext-susfs' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout target branch
@@ -24,7 +17,7 @@ jobs:
           fetch-depth: 0
           submodules: false
 
-      - name: Fetch source branch
+      - name: Fetch source and cherry-pick all 72 commits
         shell: bash
         run: |
           set -euo pipefail
@@ -32,22 +25,14 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git remote add source https://github.com/Bias8145/android_kernel_google_msm-4.9.git
           git fetch --no-tags source thirteen-next-2
-
-      - name: Cherry-pick all requested commits
-        shell: bash
-        run: |
-          set -euo pipefail
           mapfile -t commits < <(git log source/thirteen-next-2 --since='2026-05-21 00:00:00 +0000' --until='2026-07-19 00:00:00 +0000' --reverse --format='%H')
           echo "Found ${#commits[@]} commits in requested period"
           test "${#commits[@]}" -eq 72
-
           for i in "${!commits[@]}"; do
             commit="${commits[$i]}"
             echo "=== [$((i+1))/72] Cherry-picking $commit ==="
             git cherry-pick -x "$commit"
           done
-
-          echo '=== Integration complete: 72/72 ==='
 
       - name: Verify KSU Next and SUSFS
         shell: bash
@@ -58,8 +43,6 @@ jobs:
           test -f include/linux/susfs.h
           git status --short
 
-      - name: Push integrated branch
+      - name: Push target branch
         shell: bash
-        run: |
-          set -euo pipefail
-          git push origin HEAD:Release_Q_1-ksunext-susfs
+        run: git push origin HEAD:Release_Q_1-ksunext-susfs
