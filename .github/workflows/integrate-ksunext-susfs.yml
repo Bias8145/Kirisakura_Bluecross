@@ -2,26 +2,29 @@ name: Integrate Q1 KSU Next SUSFS
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - Release_Q_1-ksunext-susfs
+    inputs:
+      target_branch:
+        description: Target Q1 branch
+        required: true
+        default: Release_Q_1-ksunext-susfs
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   integrate:
-    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'ci: trigger Q1 KSU SUSFS integration'
+    if: github.event.inputs.target_branch == 'Release_Q_1-ksunext-susfs'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Q1 target
         uses: actions/checkout@v4
         with:
-          ref: Release_Q_1-ksunext-susfs
+          ref: ${{ github.event.inputs.target_branch }}
           fetch-depth: 0
           submodules: false
 
-      - name: Integrate all commits from requested period
+      - name: Integrate all 72 requested commits
         shell: bash
         run: |
           set -euo pipefail
@@ -34,20 +37,12 @@ jobs:
           echo "Found ${#commits[@]} commits in requested period"
           test "${#commits[@]}" -eq 72
 
-          for commit in "${commits[@]}"; do
-            echo "=== Cherry-picking $commit ==="
-            if ! git cherry-pick -x "$commit"; then
-              echo 'CONFLICT: stopping safely; no automatic overwrite of Q1 content.'
-              git status --short
-              git cherry-pick --abort
-              exit 1
-            fi
+          for i in "${!commits[@]}"; do
+            commit="${commits[$i]}"
+            echo "=== [$((i+1))/72] Cherry-picking $commit ==="
+            git cherry-pick -x "$commit"
           done
 
-          echo '=== Integration complete ==='
-          echo "Applied ${#commits[@]} commits"
-          echo '=== KSU/SUSFS paths ==='
-          find drivers -maxdepth 3 -type f -iname '*ksu*' -print 2>/dev/null || true
-          find fs include -type f \( -name 'susfs.c' -o -name 'susfs.h' \) -print 2>/dev/null || true
+          echo '=== Integration complete: 72/72 ==='
           git status --short
-          git push origin HEAD:Release_Q_1-ksunext-susfs
+          git push origin "HEAD:${{ github.event.inputs.target_branch }}"
