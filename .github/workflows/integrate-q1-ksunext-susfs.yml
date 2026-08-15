@@ -1,30 +1,22 @@
 name: Integrate Q1 KSU Next SUSFS
 
-on:
-  workflow_dispatch:
-    inputs:
-      target_branch:
-        description: Target Q1 branch
-        required: true
-        default: Release_Q_1-ksunext-susfs
-        type: string
+on: workflow_dispatch
 
 permissions:
   contents: write
 
 jobs:
   integrate:
-    if: github.event.inputs.target_branch == 'Release_Q_1-ksunext-susfs'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout target branch
+      - name: Checkout Q1 target
         uses: actions/checkout@v4
         with:
           ref: Release_Q_1-ksunext-susfs
           fetch-depth: 0
           submodules: false
 
-      - name: Fetch thirteen-next-2
+      - name: Fetch source
         shell: bash
         run: |
           set -euo pipefail
@@ -40,26 +32,21 @@ jobs:
           mapfile -t commits < <(git log source/thirteen-next-2 --since='2026-05-21 00:00:00 +0000' --until='2026-07-19 00:00:00 +0000' --reverse --format='%H')
           echo "Found ${#commits[@]} commits in requested period"
           test "${#commits[@]}" -eq 72
-
           for i in "${!commits[@]}"; do
             commit="${commits[$i]}"
             echo "=== [$((i+1))/72] Cherry-picking $commit ==="
             git cherry-pick -x "$commit"
           done
 
-          echo '=== Integration complete: 72/72 ==='
-
-      - name: Verify integration
+      - name: Verify KSU Next and SUSFS
         shell: bash
         run: |
           set -euo pipefail
           test -d drivers/kernelsu
           test -f fs/susfs.c
           test -f include/linux/susfs.h
-          echo 'KSU Next + SUSFS tree verification passed.'
+          echo 'KSU Next + SUSFS verification passed.'
 
-      - name: Push target branch
+      - name: Push integrated Q1 branch
         shell: bash
-        run: |
-          set -euo pipefail
-          git push origin HEAD:Release_Q_1-ksunext-susfs
+        run: git push origin HEAD:Release_Q_1-ksunext-susfs
