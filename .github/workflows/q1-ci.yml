@@ -1,0 +1,78 @@
+name: Q1 Kernel CI
+
+on:
+  push:
+    branches:
+      - Release_Q_1-ksunext-susfs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ARCH: arm64
+  SUBARCH: arm64
+  CLANG_VERSION: 14
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Q1 kernel
+        uses: actions/checkout@v4
+        with:
+          ref: Release_Q_1-ksunext-susfs
+          fetch-depth: 1
+          submodules: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential flex libssl-dev libelf-dev ccache python3 zip rsync
+
+      - name: Build kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f Makefile
+          test -f arch/arm64/Makefile
+
+          if [ -f build.config ]; then
+            echo 'build.config detected; using repository build configuration.'
+          fi
+
+          if [ -f Makefile ]; then
+            make mrproper
+          fi
+
+          if [ -f arch/arm64/configs/vendor_defconfig ]; then
+            DEFCONFIG=vendor_defconfig
+          elif [ -f arch/arm64/configs/lineageos_b1c1_defconfig ]; then
+            DEFCONFIG=lineageos_b1c1_defconfig
+          else
+            DEFCONFIG=''
+          fi
+
+          if [ -n "$DEFCONFIG" ]; then
+            make O=out ARCH=arm64 "$DEFCONFIG"
+            make -j"$(nproc)" O=out ARCH=arm64
+          else
+            echo 'No known Q1 defconfig was found; refusing to guess a kernel configuration.'
+            echo 'Available arm64 defconfigs:'
+            find arch/arm64/configs -maxdepth 1 -type f -printf '%f\n' | sort | head -100
+            exit 1
+          fi
+
+      - name: Verify kernel output
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f out/arch/arm64/boot/Image
+          ls -lh out/arch/arm64/boot/Image
+
+      - name: Upload kernel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Q1-kernel-${{ github.sha }}
+          path: out/arch/arm64/boot/Image
+          if-no-files-found: error
