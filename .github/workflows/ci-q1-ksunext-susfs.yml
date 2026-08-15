@@ -1,0 +1,71 @@
+name: CI Q1 KSU Next SUSFS
+
+on:
+  push:
+    branches:
+      - Release_Q_1-ksunext-susfs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout Q1 KSU Next SUSFS
+        uses: actions/checkout@v4
+        with:
+          ref: Release_Q_1-ksunext-susfs
+          fetch-depth: 0
+          submodules: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential flex libssl-dev libelf-dev ccache python3 unzip zip rsync
+
+      - name: Configure ccache
+        run: |
+          echo 'CCACHE_DIR=$HOME/.ccache' >> "$GITHUB_ENV"
+          ccache --max-size=5G
+
+      - name: Check kernel tree
+        run: |
+          test -f Makefile
+          test -f Kconfig
+          test -f arch/arm64/configs/vendor/b1c1_defconfig || test -f arch/arm64/configs/b1c1_defconfig || true
+          test -d drivers/kernelsu
+          test -f fs/susfs.c
+          test -f include/linux/susfs.h
+          echo 'Q1 KSU Next + SUSFS tree check passed.'
+
+      - name: Build kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f arch/arm64/configs/vendor/b1c1_defconfig ]; then
+            DEFCONFIG=vendor/b1c1_defconfig
+          elif [ -f arch/arm64/configs/b1c1_defconfig ]; then
+            DEFCONFIG=b1c1_defconfig
+          elif [ -f arch/arm64/configs/vendor/b1c1_defconfig ]; then
+            DEFCONFIG=vendor/b1c1_defconfig
+          else
+            echo 'Unable to determine B1C1 defconfig.'
+            find arch/arm64/configs -maxdepth 3 -type f | grep -Ei 'b1c1|blueline|crosshatch|q1' | head -50 || true
+            exit 1
+          fi
+
+          make O=out ARCH=arm64 "$DEFCONFIG"
+          make -j"$(nproc)" O=out ARCH=arm64 CC='ccache gcc' CROSS_COMPILE=aarch64-linux-gnu- Image.gz-dtb
+
+      - name: Upload kernel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Q1-KSU-Next-SUSFS-kernel
+          path: |
+            out/arch/arm64/boot/Image.gz-dtb
+            out/arch/arm64/boot/Image
+          if-no-files-found: error
+          retention-days: 14
