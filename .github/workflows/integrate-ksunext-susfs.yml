@@ -1,9 +1,6 @@
 name: Integrate Q1 KSU Next SUSFS
 
 on:
-  push:
-    branches:
-      - Release_Q_1-ksunext-susfs
   workflow_dispatch:
 
 permissions:
@@ -11,7 +8,6 @@ permissions:
 
 jobs:
   integrate:
-    if: github.event_name == 'workflow_dispatch' || github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Q1 target
@@ -36,13 +32,12 @@ jobs:
 
           for commit in "${commits[@]}"; do
             echo "=== Cherry-picking $commit ==="
-            if git cherry-pick -x "$commit"; then
-              continue
-            fi
-            echo 'CONFLICT: stopping for manual inspection; Q1 content will not be overwritten automatically.'
-            git status --short
-            git cherry-pick --abort
-            exit 1
+            git cherry-pick -x "$commit" || {
+              echo 'CONFLICT: stopping for manual inspection; Q1 content will not be overwritten automatically.'
+              git status --short
+              git cherry-pick --abort
+              exit 1
+            }
           done
 
           echo '=== Integration complete ==='
