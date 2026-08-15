@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   integrate:
-    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, 'ci: run Q1 KSU SUSFS integration from target branch')
+    if: github.event_name == 'workflow_dispatch' || github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Q1 target
